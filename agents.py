@@ -2,6 +2,13 @@
 import numpy as np
 import scipy.stats as stats
 
+def recast_p_for_scipy(p):
+    p[p<1e-14] = 1e-14
+    #p = np.asarray(p,dtype='float64')
+    p = p / np.sum(p)
+    return p
+
+
 class Agent():
     def __init__(self,env,k):
         self.env = env
@@ -17,6 +24,12 @@ class Agent():
         
     def initialize_Q_c(self,c):
         self.Q = np.ones(self.n_actions)*c
+    
+    def get_epistemic_uncertainty(self):
+        return np.nan
+    
+    def get_total_uncertainty(self):
+        return np.nan
         
     def run(self):
         action = self._select_action()
@@ -30,7 +43,6 @@ class Agent():
         self._update_agent(action,reward)
         return reward
     
-
 class Agent_epsilon(Agent):
     
     def __init__(self,env,n_actions,eps):
@@ -45,23 +57,6 @@ class Agent_epsilon(Agent):
         
     def _update_agent(self,action,reward):
         self.Q[action] = self.Q[action] + (1./self.steps[action])*(reward-self.Q[action])
-
-class Agent_optimistic(Agent_epsilon):
-    
-    def __init__(self,env,n_actions,eps):
-        super().__init__(env,n_actions,eps)
-    
-    def initialize_Q_optimistic(self,q):
-        super().initialize_Q_c(q)
-
-class Agent_nonstationary(Agent_optimistic):
-    
-    def __init__(self,env,n_actions,eps,eta):
-        super().__init__(env,n_actions,eps)
-        self.eta = eta
-        
-    def _update_agent(self,action,reward):
-        self.Q[action] = self.Q[action] + self.eta*(reward-self.Q[action])
         
 class Agent_UCB(Agent):  
     
@@ -75,16 +70,7 @@ class Agent_UCB(Agent):
         
     def _update_agent(self,action,reward):
         self.Q[action] = self.Q[action] + (1./self.steps[action])*(reward-self.Q[action])
-        
-class Agent_UCB_nonstationary(Agent_UCB):  
-    
-    def __init__(self,env,n_actions,c,eta):
-        super().__init__(env,env,n_actions,c)
-        self.eta = eta
 
-    def _update_agent(self,action,reward):
-        self.Q[action] = self.Q[action] + self.eta*(reward-self.Q[action])
-        
 class Agent_GradientBoltzmann(Agent):
 
     def __init__(self,env,n_actions,eta):
@@ -92,7 +78,14 @@ class Agent_GradientBoltzmann(Agent):
         self.eta = eta
         
     def initialize_H_zeros(self):
-        self.H = np.zeros(self.n_actions) 
+        self.H = np.zeros(self.n_actions)
+        
+    def get_epistemic_uncertainty(self):
+        return np.nan
+    
+    def get_total_uncertainty(self):
+        ps = self._compute_action_distribution()
+        return stats.multinomial.entropy(1, ps)
     
     def _compute_action_distribution(self):
         return np.exp(self.H) / np.sum(np.exp(self.H))
@@ -108,78 +101,12 @@ class Agent_GradientBoltzmann(Agent):
         
         self.H = self.H - m * pi
         self.H[action] = self.H[action] + m*pi[action] + m * (1-pi[action])
-        
-class Agent_GradientBoltzmann_fixedbaseline(Agent_GradientBoltzmann):
-
-    def __init__(self,env,n_actions,eta,baseline):
-        super().__init__(env,n_actions,eta)
-        self.baseline = baseline
-        
-    def _update_agent(self,action,reward):
-        pi = self._compute_action_distribution()
-        m = self.eta * (reward - self.baseline)
-        
-        self.H = self.H - m * pi
-        self.H[action] = self.H[action] + m*pi[action] + m * (1-pi[action])
-
-
-#Agent_softmaxPreference = Agent_Boltzmann
-#Agent_softmaxPreference_fixedbaseline = Agent_Boltzmann_fixedbaseline
-
-
-class Agent_ConjugateGradientBoltzmann(Agent):
-
-    def __init__(self,env,n_actions,eta):
-        super().__init__(env,n_actions)
-        self.eta = eta
-        
-    def initialize_H_zeros(self):
-        self.H = np.zeros(self.n_actions)
-        
-    def get_epistemic_uncertainty(self):
-        alphas = self._compute_action_distribution()
-        return stats.dirichlet.entropy(alphas)
-    
-    def get_total_uncertainty(self):
-        alphas = self._compute_action_distribution()
-        ps = alphas / np.sum(alphas)
-        return stats.multinomial.entropy(1, ps)
-    
-    def _compute_action_distribution(self):
-        alphas = np.exp(self.H) / np.sum(np.exp(self.H))
-        return alphas
-           
-    def _select_action(self): 
-        alphas = self._compute_action_distribution()
-        self.pi = stats.dirichlet.rvs(alphas, 1)[0]
-        self.pi[self.pi<1e-14] = 1e-14
-        self.pi = np.asarray(self.pi,dtype='float64')
-        self.pi = self.pi / np.sum(self.pi)
-        action = stats.multinomial.rvs(1, self.pi, 1)[0]
-        return np.argmax(action)
-        
-    def _update_agent(self,action,reward):
-        m = self.eta * (reward - np.sum(self.rewards)/np.sum(self.steps))
-        
-        self.H = self.H - m * self.pi
-        self.H[action] = self.H[action] + m*self.pi[action] + m * (1-self.pi[action])
-        
-class Agent_ConjugateGradientBoltzmann_fixedbaseline(Agent_ConjugateGradientBoltzmann):
-
-    def __init__(self,env,n_actions,eta,baseline):
-        super().__init__(env,n_actions,eta)
-        self.baseline = baseline
-        
-    def _update_agent(self,action,reward):
-        m = self.eta * (reward - self.baseline)
-        
-        self.H = self.H - m * self.pi
-        self.H[action] = self.H[action] + m*self.pi[action] + m * (1-self.pi[action])
 
 
 class Agent_Subjective(Agent):
     
-    def __init__(self,env,n_actions):
+    def __init__(self,env,n_actions,eta=1.):
+        self.eta = eta
         super().__init__(env,n_actions)
         
     def initialize_empty_opinion(self):
@@ -198,15 +125,13 @@ class Agent_Subjective(Agent):
     
     def _compute_action_distribution(self):
         ps = self.b + self.u*self.c
+        ps = recast_p_for_scipy(ps)
         return ps
            
     def _select_action(self):
-        pi = self._compute_action_distribution()
-        pi[pi<1e-14] = 1e-14
-        pi = np.asarray(pi,dtype='float64')
-        pi = pi / np.sum(pi)
-        action = stats.multinomial.rvs(1, pi, 1)[0]
-        return np.argmax(action)
+        pi = self._compute_action_distribution()        
+        action = np.random.choice(self.n_actions,1,p=pi)[0]
+        return action
         
     def _update_agent(self,action,reward):
         raise NotImplemented
@@ -218,17 +143,86 @@ class Agent_SubjectiveEvidential(Agent_Subjective):
         r[action] = r[action] + 1
         
         self.b = r / (self.W + np.sum(r))
-        self.u = self.W / (self.W + np.sum(r)) 
-
-    
-class Agent_SubjectiveGradient(Agent_Subjective):
-    def __init__(self,env,n_actions,eta):
-        self.eta = eta
-        super().__init__(env,n_actions)
-   
-    def _update_agent(self,action,reward):
-        m = self.eta * (reward - np.sum(self.rewards)/np.sum(self.steps))
+        self.u = self.W / (self.W + np.sum(r))
         
-        self.b = self.b - m * self.c
-        self.b[action] = self.b[action] + m * self.c[action] + m * (1 - self.c[action])
-        self.u = 1 - np.sum(self.b)
+class Agent_SubjectiveEvidential_avgreward(Agent_Subjective):
+        
+    def _update_agent(self,action,reward):
+        r = (self.W * self.b) / self.u
+        
+        if (reward >= np.mean(self.rewards/self.steps)):
+            r[action] = r[action] + self.eta
+        
+            self.b = r / (self.W + np.sum(r))
+            self.u = self.W / (self.W + np.sum(r))
+            
+class Agent_SubjectiveEvidential_maxreward(Agent_Subjective):
+        
+    def _update_agent(self,action,reward):
+        r = (self.W * self.b) / self.u
+        
+        if (reward >= np.max(self.rewards/self.steps)):
+            r[action] = r[action] + self.eta
+        
+            self.b = r / (self.W + np.sum(r))
+            self.u = self.W / (self.W + np.sum(r))
+
+class Agent_SubjectiveEvidential_maxrewardscaled(Agent_Subjective):
+        
+    def _update_agent(self,action,reward):
+        r = (self.W * self.b) / self.u
+        
+        if (reward >= np.max(self.rewards/self.steps)):
+            r[action] = r[action] + self.eta*(reward - np.max(self.rewards/self.steps))
+        
+            self.b = r / (self.W + np.sum(r))
+            self.u = self.W / (self.W + np.sum(r))
+            
+class Agent_SubjectiveEvidential_maxreward2scaled(Agent_Subjective):
+        
+    def _update_agent(self,action,reward):
+        r = (self.W * self.b) / self.u
+        
+        estimated_rewards = self.rewards/self.steps
+        bestaction = np.argmax(estimated_rewards)
+        estimated_rewards[bestaction] = -np.inf
+        secondbestaction = np.argmax(estimated_rewards)
+        estimated_rewards[bestaction] = self.rewards[bestaction]/self.steps[bestaction]
+        
+        if(action==bestaction):
+            if(reward > estimated_rewards[secondbestaction]):
+                r[action] = r[action] + self.eta*(reward - estimated_rewards[secondbestaction])
+        
+        elif(reward >= estimated_rewards[bestaction]):
+            r[action] = r[action] + self.eta*(reward - estimated_rewards[bestaction])
+        
+        self.b = r / (self.W + np.sum(r))
+        self.u = self.W / (self.W + np.sum(r))
+            
+           
+class Agent_SubjectiveEvidential_upsilon(Agent_SubjectiveEvidential_maxrewardscaled):
+               
+    def _select_action(self):
+        pi = self._compute_action_distribution()  
+        if(np.random.random() < self.u):      
+            return np.random.choice(self.n_actions,1,p=pi)[0]
+        else:
+            return np.argmax(pi)
+        
+class Agent_SubjectiveEvidential_upsilon2(Agent_SubjectiveEvidential_maxrewardscaled):
+               
+    def _select_action(self):
+        pi = self._compute_action_distribution()  
+        if(np.random.random() < self.u):      
+            return np.random.choice(self.n_actions,1,p=pi)[0]
+        else:
+            return np.argmax(pi)
+        
+    def _update_agent(self,action,reward):
+        r = (self.W * self.b) / self.u
+        
+        if (reward >= np.max(self.rewards/self.steps)):
+            r[action] = r[action] + (1 / self.u)*(reward - np.max(self.rewards/self.steps))
+        
+            self.b = r / (self.W + np.sum(r))
+            self.u = self.W / (self.W + np.sum(r))
