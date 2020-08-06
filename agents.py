@@ -58,6 +58,19 @@ class Agent_epsilon(Agent):
     def _update_agent(self,action,reward):
         self.Q[action] = self.Q[action] + (1./self.steps[action])*(reward-self.Q[action])
         
+class Agent_epsilondecay(Agent_epsilon):
+    
+    def __init__(self,env,n_actions,decay):
+        super().__init__(env,n_actions,None)
+        self.decay = decay
+           
+    def _select_action(self):
+        threshold = 1. / np.sum(self.steps)**(1./self.decay)
+        if(np.random.random() < threshold):
+            return np.random.randint(0,self.n_actions)
+        else:
+            return np.argmax(self.Q)
+        
 class Agent_UCB(Agent):  
     
     def __init__(self,env,n_actions,c):
@@ -70,6 +83,30 @@ class Agent_UCB(Agent):
         
     def _update_agent(self,action,reward):
         self.Q[action] = self.Q[action] + (1./self.steps[action])*(reward-self.Q[action])
+        
+class Agent_UCB1Normal(Agent_UCB):  
+    
+    def __init__(self,env,n_actions,c):
+        super().__init__(env,n_actions,c)
+        self.squaredrewards = np.zeros(self.n_actions)
+           
+    def _select_action(self):
+        #threshold = np.ceil(np.log(np.sum(self.steps)))
+        threshold = 0
+        if np.any(self.steps < threshold):
+            return np.random.choice(np.where(self.steps < threshold)[0])
+        else:            
+            a = self.Q + self.c * np.sqrt((self.squaredrewards - self.steps*self.Q**2)/(self.steps-1) * 
+                                          (np.log(np.sum(self.steps)-1))/(self.steps) )
+            return np.argmax(a)
+        
+    def step(self,action):
+        self.steps[action] = self.steps[action]+1
+        _,reward,_,_ = self.env.step(action)
+        self.rewards[action] = self.rewards[action] + reward
+        self.squaredrewards[action] = self.squaredrewards[action] + reward**2
+        self._update_agent(action,reward)
+        return reward
 
 class Agent_GradientBoltzmann(Agent):
 
